@@ -169,7 +169,7 @@ unsigned int serialReadLn(char* buffer, size_t buffLength, int timeoutMillis) {
       break;
     }
 
-    while(Serial.available() > 0) {
+    if(Serial.available() > 0) {
       char c = Serial.read();
       if(pos < buffLength) {
         buffer[pos++] = c;
@@ -206,6 +206,7 @@ void startCapture() {
 // 
 // Issues:
 //  micros() wraps once an hour so could be unlucky... will deal with this at the host end by adding 2**32
+//  RTT is variable - could get remote host to respond with AGAIN to retry until a decent RTT is achieved
 boolean trySerialClockSync() {
   char strBuffer[64];
   unsigned long localMicrosA = 0;
