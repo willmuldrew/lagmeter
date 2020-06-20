@@ -10,7 +10,7 @@ Optionally, you can run some software on the target machine to collect more data
  * LagWinApp.exe - very minimal windows app that cycles from black-white-black with keypresses (x).  Also logs timestamped WM_PAINT, WM_KEYDOWN events to the tempdir
  * ProcessResults.ipynb jupyter notebook - reads in arduino output, pcap and LagWinApp output from disk and plots some results
 
-Here's some of the charts that the notebook produces showing network traffic for an RDP test.  At the top you see the changing brightness of the screen for a letter X.  Below you see what I can only assume is the outbound key press and display update coming back - it's all encrypted so you can't really be sure!
+Here's some of the charts that the notebook produces showing network traffic for an RDP test.  At the top you see the changing brightness of the screen for a letter X as read by the arduino.  Below you see the network traffic - I can only assume it is the outbound key press and display update coming back - it's all encrypted so you can't really be sure!
 
 ![chart](img/charts.jpg)
 
@@ -57,5 +57,5 @@ Components:
 * SSD1306 OLED display - I bought these: https://www.amazon.co.uk/dp/B0832VQN65/ref=pe_3187911_185740111_TE_item
 * SFH 3310 phototransistor https://uk.rs-online.com/web/p/phototransistors/6547808/  (I initially used an LDR but it was too slow to react and made it look like the display response time was ~50ms). It's got some heat-shrink round it here for insulation, but also to make a nice window you can point at the screen. Make sure it's wired the right way round!
 * momentary microswitch - for initiating captures. Long press to change modes
-* resistor 47kohm - probably a bit large for fast response - may go for a smaller one in the future
+* resistor 47kohm - probably a bit large for fast response - may go for a smaller one in the future - TODO: measure response time on oscilloscope
 * some wires/cable
