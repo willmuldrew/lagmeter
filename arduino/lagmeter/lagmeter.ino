@@ -464,11 +464,6 @@ void processResults() {
     int midTime = captureBuffer[midN].timestamp;
     int responseTime = captureBuffer[endN].timestamp - captureBuffer[startN].timestamp;
     
-    Serial.println(startN);
-    Serial.println(endN);    
-    Serial.println(captureBuffer[startN].timestamp);
-    Serial.println(captureBuffer[endN].timestamp);
-    
     sprintf(msgBufferA, "L:%d R:%d", midTime, responseTime);
     sprintf(msgBufferB, "Rng:%d-%d", (int)startMean, (int)endMean);
   }
