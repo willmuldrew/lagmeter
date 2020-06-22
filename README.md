@@ -57,5 +57,5 @@ Components:
 * SSD1306 OLED display - I bought these: https://www.amazon.co.uk/dp/B0832VQN65/ref=pe_3187911_185740111_TE_item
 * SFH 3310 phototransistor https://uk.rs-online.com/web/p/phototransistors/6547808/  (I initially used an LDR but it was too slow to react and made it look like the display response time was ~50ms). It's got some heat-shrink round it here for insulation, but also to make a nice window you can point at the screen. Make sure it's wired the right way round!
 * momentary microswitch - for initiating captures. Long press to change modes
-* resistor 47kohm - probably a bit large for fast response - may go for a smaller one in the future - TODO: measure response time on oscilloscope
+* resistor 47kohm - this gives us a sensor response time of about 2ms (tested with an led driven by a square wave and an oscilloscope). A smaller resistor means that the capacitance in the sensor drains quicker and response time is faster. However the voltage change shrinks.  2ms seems fine for now, though I might be able to find a better sensor circuit.
 * some wires/cable
