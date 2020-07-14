@@ -1,36 +1,35 @@
 // libs required:
-// u8g2
-// 
+// u8g2 (display)
+// AceButton (pushbuttons)
+
 
 #include <Arduino.h>
 #include <Keyboard.h>
 #include <Mouse.h>
 #include <Wire.h>
 #include <U8g2lib.h>
+#include <AceButton.h>
+
+using namespace ace_button;
+
+#define SYNC_TIMEOUT_MILLIS 1000
+
+#define SAMPLE_BUFFER_LENGTH 200  // not much memory on arduino!
+#define MULTI_RUN_LENGTH 10
+#define LED_PIN 13 // going to light this while the capture's active - helpful for debugging and calibration
 
 // OLED display
 U8G2_SSD1306_128X64_NONAME_1_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 
-// are we using/do we have a mems MPU attached - can tape one to a real keyboard and use it to 
-// trigger capture when we hammer a key!
-//#define HAS_MPU
-
-#ifdef HAS_MPU 
-float mag_a_prev = -1;
-const int MPU=0x68;
-#endif
-
-#define SAMPLE_BUFFER_LENGTH 144  // not much memory on arduino!
-
 // Target interval for light capture measurements
-const int sampleInterval = 1500; // micros - approx
+const int sampleInterval = 2000; // micros - approx
 
 // How long to busy sample the sensor (then applies mean)
 const int sampleDuration = 1000;
 
 typedef struct datapoint {
   uint16_t timestamp;
-  uint16_t value;
+  uint8_t value;
 } datapoint_t;
 
 // Global state for the light-level capture buffer
@@ -42,7 +41,20 @@ datapoint_t captureBuffer[SAMPLE_BUFFER_LENGTH];
 char msgBufferA[17];
 char msgBufferB[17];
 
-// Flag for button press interrupt
+AceButton startCaptureButton(7);
+AceButton modeButton(6);
+AceButton* buttons[] = { 
+  &startCaptureButton, 
+  &modeButton
+};
+
+int runsToDo = 0;
+int currentRun = 0;
+
+float multiRunLagSum = 0;
+float multiRunLagSumSq = 0;
+int multiRunLagCount = 0;
+
 
 enum class Mode { 
   KeyboardX,
@@ -51,6 +63,13 @@ enum class Mode {
   AltEscape, // AltEscape is next window switching - faster than alt tab (use shift to go back!)
   Count
 };
+
+Mode currentMode = Mode::KeyboardX;
+
+void nextMode() {
+  currentMode = static_cast<Mode>((static_cast<int>(currentMode) + 1) % static_cast<int>(Mode::Count)); 
+  writeScreenMessage("Mode:", getModeDescription(currentMode));
+}
 
 const char* getModeDescription(Mode m) {
   switch(m) {
@@ -64,41 +83,50 @@ const char* getModeDescription(Mode m) {
       return "Alt-Escape";
   }
 }
-  
-Mode currentMode = Mode::KeyboardX;
 
-void nextMode() {
-  currentMode = static_cast<Mode>((static_cast<int>(currentMode) + 1) % static_cast<int>(Mode::Count)); 
+void handleButtonEvent(AceButton* pButton, uint8_t eventType, uint8_t /*buttonState*/) {
+  if(pButton == &startCaptureButton) {
+    switch (eventType) {
+      case AceButton::kEventClicked:
+        startTest(1);
+        break;
+      case AceButton::kEventLongPressed:
+        startTest(MULTI_RUN_LENGTH);
+        break;    
+    }
+  } else if(pButton == &modeButton) {
+    switch (eventType) {
+       case AceButton::kEventClicked:     
+        nextMode();
+        break;    
+    }
+  }
 }
 
-// if we've send a keyboard event, then after a short time we want to delete it again
-boolean doBackspace = false;
-boolean doShiftAltEscape = false;
-boolean doAltTab = false;
 
 void setup() {
+  for(auto pButton : buttons) {
+    pinMode(pButton->getPin(), INPUT_PULLUP);  
+    pButton->setEventHandler(handleButtonEvent);
+    ButtonConfig* buttonConfig = pButton->getButtonConfig();
+    buttonConfig->setEventHandler(handleButtonEvent);
+    buttonConfig->setFeature(ButtonConfig::kFeatureClick);
+    buttonConfig->setFeature(ButtonConfig::kFeatureLongPress);
+    buttonConfig->setFeature(ButtonConfig::kFeatureSuppressAfterClick);
+  }
+  
   u8g2.begin();
     
-  Serial.begin(115200);
-  clearCaptureBuffer();
+  Serial.begin(115200);  
   Keyboard.begin();
   Mouse.begin();
 
-#ifdef HAS_MPU
-  setupMPU();
-#endif
-
+  clearCaptureBuffer();
   writeScreenMessage("Ready...", "");
   drawScreen();
 
-  pinMode(7, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(7), onButtonPress, FALLING);
-}
-
-boolean buttonPressed = false;
-
-void onButtonPress() {
-  buttonPressed = true;
+  pinMode(LED_PIN, OUTPUT);    
+  digitalWrite(LED_PIN, LOW);
 }
 
 void writeScreenMessage(const char* line1, const char* line2) {
@@ -106,45 +134,6 @@ void writeScreenMessage(const char* line1, const char* line2) {
   snprintf(msgBufferB, sizeof(msgBufferB), line2);
   drawScreen();   
 }
-
-#ifdef HAS_MPU
-void setupMPU() { 
-  Wire.begin();
-  Wire.beginTransmission(MPU);
-  Wire.write(0x6B); // reset 
-  Wire.write(0);    
-  Wire.endTransmission(true);
-}
-
-float pollMPU(float threshold) {
-  // You can get the MPU-6050 to do clever motion detection and fire interrupts, but 
-  // I got this working pretty easily.
-  // 
-  // Improvements:
-  //  * use interrupts and hardware motion detection (need to decode the datasheet)
-  //  * use the onboard FIFO to pull back a history 
-  //
-  // Useful - https://www.i2cdevlib.com/devices/mpu6050#registers
-
-  Wire.beginTransmission(MPU);
-  Wire.write(0x3B);  
-  Wire.endTransmission(false);
-  Wire.requestFrom(MPU,6,true);  
-  int16_t AcX=Wire.read()<<8|Wire.read();    
-  int16_t AcY=Wire.read()<<8|Wire.read();  
-  int16_t AcZ=Wire.read()<<8|Wire.read();  
-  
-  float mag_a = ((float)AcX) * ((float)AcX) + ((float)AcY) * ((float)AcY) + ((float)AcZ) * ((float)AcZ);
-
-  if(mag_a_prev >= 0 && abs(mag_a - mag_a_prev) > threshold) {
-    mag_a_prev = -1;
-    return true;
-  } else {
-    mag_a_prev = mag_a;  
-    return false;    
-  }
-}
-#endif // HAS_MPU
 
 void clearCaptureBuffer() {
    memset(captureBuffer, 0, sizeof(captureBuffer));
@@ -213,9 +202,8 @@ void startCapture() {
   clearCaptureBuffer();
   writePosition = 0; 
   t0 = micros();    
+  digitalWrite(LED_PIN, HIGH);
 }
-
-#define SYNC_TIMEOUT_MILLIS 1000
 
 // Attempt to sync clock with host on serial bus. Requires relevant lagcap python process to be running
 // on the other end...  will wait SYNC_TIMEOUT_MILLIS before giving up to prevent the lack of correct
@@ -279,13 +267,27 @@ int readSmoothedAnalog(int durationMicros){
   return (int)(sum / count);
 }
 
+void startTest(int runs){
+  writeScreenMessage("Test", "starting...");  
+  if(trySerialClockSync()) {
+    delay(1000); // give the remote host a chance to kick off pcaps etc...
+  }       
+
+  multiRunLagCount = 0;
+  multiRunLagSum = 0;
+  multiRunLagSumSq = 0;
+  
+  runsToDo = runs;
+  currentRun = 0;
+}
+
 void loop() {  
   if(isCaptureRunning()) {
     // If the capture is running we don't want to do anything else
     unsigned long t = micros();
     int reading = readSmoothedAnalog(sampleDuration);
     if(reading >= 0) {    
-      captureBuffer[writePosition].value = reading;
+      captureBuffer[writePosition].value = reading / 4;
       captureBuffer[writePosition].timestamp = (t - t0) / 1000;
       writePosition++;
     } else {
@@ -293,40 +295,23 @@ void loop() {
     }
     
     if(writePosition == SAMPLE_BUFFER_LENGTH) {
+      digitalWrite(LED_PIN, LOW); 
       // We've done our last measurement - do some processing for local display and dump results to the 
       // serial port      
       dumpResultsToSerial();
       processResults();
+      
+      currentRun++;
+      if(runsToDo > 1 && currentRun == runsToDo) {
+        // We've finished a multirun
+        processMultiResults();
+      }
 
       // If we generated a keypress, let's delete it for convenience...  Sometimes it gets annoying though
       // if your backspaces hit a browser!
-      if(doBackspace) {
-        delay(1000);
-        Keyboard.write(KEY_BACKSPACE);
-        doBackspace = false;
-      }
-
-      if(doShiftAltEscape) { // go back to previous window
-        delay(1000);
-        Keyboard.press(KEY_RIGHT_SHIFT);
-        Keyboard.press(KEY_LEFT_ALT);
-        Keyboard.press(KEY_ESC);
-        delay(1);
-        Keyboard.releaseAll();
-        doShiftAltEscape = false;
-      }
-
-      if(doAltTab) {
-        delay(1000);        
-        Keyboard.press(KEY_LEFT_ALT);
-        Keyboard.press(KEY_TAB);
-        delay(1);
-        Keyboard.releaseAll();        
-        doAltTab = false;
-      }
-
+      doHIDUndo();
       // Update the screen (including drawing a chart)
-      drawScreen();
+      drawScreen();      
     } else {
       // busy loop to delay until next sample is scheduled...
       unsigned long now = micros();
@@ -334,42 +319,19 @@ void loop() {
         now = micros(); 
       }
     }
+  } else if(runsToDo - currentRun > 0){  
+    char buff[128];
+    sprintf(buff, "run %d/%d", currentRun, runsToDo);
+    writeScreenMessage(buff, "");
+    if(currentRun > 0) {
+      delay(random(500, 2000));
+    }
+    startCapture();
+    doHIDOutput();    
   } else {
-    // process inputs
-    if(buttonPressed || digitalRead(7) == LOW) {
-      boolean modeChanged = false;
-      while(digitalRead(7) == LOW) {
-        // still pressed
-        delay(500);
-        if(digitalRead(7) == LOW) {
-          nextMode();
-          modeChanged = true;
-          writeScreenMessage("Mode:", getModeDescription(currentMode));          
-        }        
-      }
-      delay(200); // make sure fingers are well clear!
-
-      if(!modeChanged) { // not a long press - let's do a capture
-        if(trySerialClockSync()) {
-          delay(1000); // give the remote host a chance to kick off pcaps etc...
-        }       
-        startCapture();
-        doHIDOutput();
-      }   
-    }    
-    buttonPressed = false;
-    
-#ifdef HAS_MPU
-    else if(pollMPU(100e6)) {
-      // TODO - since we don't control the physical keyboard and the physical keypress is already on it's way across the USB bus
-      // we don't want to spend any time doing a clock sync or triggering a pcap.
-      //
-      // However, we could a). have a continuous pcap into a ring buffer on the host and b). do the clock sync and triggering 
-      // after the arduino capture is finished. This would establish the clock offsets, and also tell the lagcap program to 
-      // use the last X millis of pcap as results.
-      startCapture();
-    }   
-#endif
+    for(auto pButton : buttons) {
+      pButton->check();
+    }
   }
 }
 
@@ -377,14 +339,12 @@ void doHIDOutput() {
   switch(currentMode) {
     case Mode::KeyboardX:
       Keyboard.print("x");
-      doBackspace = true;
       break;
     case Mode::AltTab:
       Keyboard.press(KEY_LEFT_ALT);
       Keyboard.press(KEY_TAB);
       delay(1);
       Keyboard.releaseAll();        
-      doAltTab = true;
       break;
     case Mode::LeftClick:
       Mouse.click();
@@ -394,7 +354,27 @@ void doHIDOutput() {
       Keyboard.press(KEY_ESC);
       delay(1);
       Keyboard.releaseAll();     
-      doShiftAltEscape = true;  
+  }        
+}
+
+void doHIDUndo() {
+  delay(500);
+  switch(currentMode) {
+    case Mode::KeyboardX:
+      Keyboard.write(KEY_BACKSPACE);
+      break;
+    case Mode::AltTab:
+      Keyboard.press(KEY_LEFT_ALT);
+      Keyboard.press(KEY_TAB);
+      delay(1);
+      Keyboard.releaseAll(); 
+      break;
+    case Mode::AltEscape:
+      Keyboard.press(KEY_RIGHT_SHIFT);
+      Keyboard.press(KEY_LEFT_ALT);
+      Keyboard.press(KEY_ESC);
+      delay(1);
+      Keyboard.releaseAll(); 
   }        
 }
 
@@ -454,17 +434,39 @@ void processResults() {
     }
   }
   
-  if(abs(startMean - endMean) < 20) {    
+  if(abs(startMean - endMean) < 10) {    
     sprintf(msgBufferA, "ERR:range low");
     sprintf(msgBufferB, "(%d-%d)", (int)startMean, (int)endMean);
+    Serial.println("DEBUG: range low");
   } else if(midN == -1 || startN == -1 || endN == -1) {
     sprintf(msgBufferA, "ERR:crossing");
     sprintf(msgBufferB, "not found");
+    Serial.println("DEBUG: crossing not found");
   } else {
     int midTime = captureBuffer[midN].timestamp;
     int responseTime = captureBuffer[endN].timestamp - captureBuffer[startN].timestamp;
     
     sprintf(msgBufferA, "L:%d R:%d", midTime, responseTime);
     sprintf(msgBufferB, "Rng:%d-%d", (int)startMean, (int)endMean);
+
+    multiRunLagCount++;
+    multiRunLagSum += midTime;
+    multiRunLagSumSq += midTime * midTime;
+        
+    Serial.println(msgBufferA);
+    Serial.println(msgBufferB);    
+  }  
+}
+
+void processMultiResults() {
+  if(multiRunLagCount > 0) {    
+    float mean = multiRunLagSum / multiRunLagCount;    
+    float stddev = sqrt(multiRunLagSumSq / multiRunLagCount - mean * mean);
+  
+    sprintf(msgBufferA, "L(m):%d std: %d", (int)(mean + 0.5), (int)(stddev + 0.5));
+    sprintf(msgBufferB, "count:%d", multiRunLagCount);  
+  } else {
+    sprintf(msgBufferA, "no valid");  
+    sprintf(msgBufferB, "readings");  
   }
 }
