@@ -196,18 +196,17 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam)
         messages.push_back(new WinMsg(getUnixTimeMicros(), "WM_PAINT (post)"));        
         return 0;
     case WM_KEYDOWN:
-        if (wParam == 0x58) { // letter 'x' - our arduino test key
-            clearMessages();
-            messages.push_back(new WinMsg(getUnixTimeMicros(), "WM_KEYDOWN(x)"));
-            altColour = !altColour;
-            RedrawWindow(m_hwnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
-            return 0;
-        }
+    case WM_LBUTTONDOWN:
+        clearMessages();
+        messages.push_back(new WinMsg(getUnixTimeMicros(), "WM_KEYDOWN(x)"));
+        altColour = !altColour;
+        RedrawWindow(m_hwnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
+        return 0;
     case WM_KEYUP:
-        if (wParam == 0x58) {
-            dumpMessages();
-            clearMessages();
-        }
+    case WM_LBUTTONUP:
+        dumpMessages();
+        clearMessages();
+    
     }
 
     return DefWindowProc(m_hwnd, uMsg, wParam, lParam);
